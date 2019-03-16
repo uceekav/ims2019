@@ -1,0 +1,226 @@
+/**
+ * @license
+ * Copyright 2016 Google Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+
+goog.provide('shaka.ui.OverflowMenu');
+
+goog.require('shaka.ui.Constants');
+goog.require('shaka.ui.Controls');
+goog.require('shaka.ui.Element');
+goog.require('shaka.ui.Enums');
+goog.require('shaka.ui.Locales');
+goog.require('shaka.ui.Localization');
+goog.require('shaka.ui.Utils');
+
+
+/**
+ * @extends {shaka.ui.Element}
+ * @final
+ * @export
+ */
+ shaka.ui.OverflowMenu = class extends shaka.ui.Element {
+  /**
+   * @param {!HTMLElement} parent
+   * @param {!shaka.ui.Controls} controls
+   */
+  constructor(parent, controls) {
+    super(parent, controls);
+
+    /** @private {!shaka.extern.UIConfiguration} */
+    this.config_ = this.controls.getConfig();
+
+    /** @private {!HTMLElement} */
+    this.controlsContainer_ = this.controls.getControlsContainer();
+
+    this.addOverflowMenuButton_();
+
+    this.addOverflowMenu_();
+
+    this.createChildren_();
+
+    /** @private {!NodeList.<!Element>} */
+    this.backToOverflowMenuButtons_ = this.controls.getVideoContainer().
+        getElementsByClassName('shaka-back-to-overflow-button');
+
+
+    for (let i = 0; i < this.backToOverflowMenuButtons_.length; i++) {
+      let button = this.backToOverflowMenuButtons_[i];
+      button.addEventListener('click', () => {
+        // Hide the submenus, display the overflow menu
+        this.controls.hideSettingsMenus();
+        shaka.ui.Utils.setDisplay(this.overflowMenu_, true);
+
+        // If there are back to overflow menu buttons, there must be
+        // overflow menu buttons, but oh well
+        if (this.overflowMenu_.childNodes.length) {
+          /** @type {!HTMLElement} */ (this.overflowMenu_.childNodes[0])
+            .focus();
+        }
+
+        // Make sure controls are displayed
+        this.controls.overrideCssShowControls();
+      });
+    }
+
+    this.eventManager.listen(
+      this.localization, shaka.ui.Localization.LOCALE_UPDATED, () => {
+        this.updateAriaLabel_();
+      });
+
+    this.eventManager.listen(
+      this.localization, shaka.ui.Localization.LOCALE_CHANGED, () => {
+        this.updateAriaLabel_();
+      });
+
+
+    this.eventManager.listen(
+      this.controls, 'submenuopen', () => {
+        // Hide the main overflow menu if one of the sub menus has
+        // been opened.
+        shaka.ui.Utils.setDisplay(this.overflowMenu_, false);
+      });
+
+
+    this.eventManager.listen(
+      this.overflowMenu_, 'touchstart', (event) => {
+        this.controls.setLastTouchEventTime(Date.now());
+        event.stopPropagation();
+      });
+
+    this.eventManager.listen(this.overflowMenuButton_, 'click', () => {
+        this.onOverflowMenuButtonClick_();
+      });
+
+    this.eventManager.listen(
+      this.controlsContainer_, 'touchstart', (event) => {
+        // If the overflow menu is showing, hide it on a touch event
+        if (this.overflowMenu_.classList.contains('shaka-displayed')) {
+          shaka.ui.Utils.setDisplay(this.overflowMenu_, false);
+          // Stop this event from becoming a click event.
+          event.preventDefault();
+        }
+      });
+
+    this.updateAriaLabel_();
+  }
+
+  /**
+   * @param {string} name
+   * @param {!shaka.extern.IUIElement.Factory} factory
+   * @export
+   */
+  static registerElement(name, factory) {
+    shaka.ui.OverflowMenu.elementNamesToFactories_.set(name, factory);
+  }
+
+
+  /**
+   * @private
+   */
+  addOverflowMenu_() {
+    /** @private {!HTMLElement} */
+    this.overflowMenu_ = shaka.ui.Utils.createHTMLElement('div');
+    this.overflowMenu_.classList.add('shaka-overflow-menu');
+    this.overflowMenu_.classList.add('shaka-no-propagation');
+    this.overflowMenu_.classList.add('shaka-show-controls-on-mouse-over');
+    this.overflowMenu_.classList.add('shaka-settings-menu');
+    this.controlsContainer_.appendChild(this.overflowMenu_);
+  }
+
+
+  /**
+   * @private
+   */
+  addOverflowMenuButton_() {
+    /** @private {!HTMLElement} */
+    this.overflowMenuButton_ = shaka.ui.Utils.createHTMLElement('button');
+    this.overflowMenuButton_.classList.add('shaka-overflow-menu-button');
+    this.overflowMenuButton_.classList.add('shaka-no-propagation');
+    this.overflowMenuButton_.classList.add('material-icons');
+    this.overflowMenuButton_.textContent =
+      shaka.ui.Enums.MaterialDesignIcons.OPEN_OVERFLOW;
+    this.parent.appendChild(this.overflowMenuButton_);
+  }
+
+
+  /**
+   * @private
+   */
+  createChildren_() {
+    for (let i = 0; i < this.config_.overflowMenuButtons.length; i++) {
+    const name = this.config_.overflowMenuButtons[i];
+    if (shaka.ui.OverflowMenu.elementNamesToFactories_.get(name)) {
+      const factory = shaka.ui.OverflowMenu.elementNamesToFactories_.get(name);
+      factory.create(this.overflowMenu_, this.controls);
+      }
+    }
+  }
+
+
+  /** @private */
+  onOverflowMenuButtonClick_() {
+    if (this.controls.anySettingsMenusAreOpen()) {
+      this.controls.hideSettingsMenus();
+    } else {
+      shaka.ui.Utils.setDisplay(this.overflowMenu_, true);
+      this.controls.overrideCssShowControls();
+      // If overflow menu has currently visible buttons, focus on the
+      // first one, when the menu opens.
+      const isDisplayed = function(element) {
+        return element.classList.contains('shaka-hidden') == false;
+      };
+
+      const Iterables = shaka.util.Iterables;
+      if (Iterables.some(this.overflowMenu_.childNodes, isDisplayed)) {
+        // Focus on the first visible child of the overflow menu
+        const visibleElements =
+          Iterables.filter(this.overflowMenu_.childNodes, isDisplayed);
+        /** @type {!HTMLElement} */ (visibleElements[0]).focus();
+      }
+    }
+  }
+
+
+  /**
+   * @private
+   */
+  updateAriaLabel_() {
+    const LocIds = shaka.ui.Locales.Ids;
+    this.overflowMenuButton_.setAttribute(shaka.ui.Constants.ARIA_LABEL,
+        this.localization.resolve(LocIds.ARIA_LABEL_MORE_SETTINGS));
+  }
+};
+
+
+/**
+ * @implements {shaka.extern.IUIElement.Factory}
+ * @final
+ */
+shaka.ui.OverflowMenu.Factory = class {
+  /** @override */
+  create(rootElement, controls) {
+    return new shaka.ui.OverflowMenu(rootElement, controls);
+  }
+};
+
+shaka.ui.Controls.registerElement(
+  'overflow_menu', new shaka.ui.OverflowMenu.Factory());
+
+
+/** @private {!Map.<string, !shaka.extern.IUIElement.Factory>} */
+shaka.ui.OverflowMenu.elementNamesToFactories_ = new Map();
+

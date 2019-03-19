@@ -8,23 +8,32 @@ source `pwd`/config/config.cfg
 usage(){
 
 cat << EOF
-#########################################################
-#							#
-# usage: runcode.sh [-iah]				#
-# -e encoder to use,e.g -e libx264 or -e libvpx-vp9	#							#
-# -i Ignores Pre checks					#
-# -a Changes Apache config				#
-# -h This help message.					#
-# -s Segment times in ms, e.g. -s 1000,2000,3000  	#
-#							#
-#########################################################
+#########################################################################################
+#											#
+# usage: runcode.sh [-fhisv]								#	
+# -f FFMPEG flags e.g. -f "-c:v libvpx-vp9 -t 5"					#
+# -h This help message.									#
+# -i Ignores Pre checks									#
+# -s Segment times in ms, e.g. -s 1000,2000,3000  					#
+# -v Raw video file to encode								#
+#											#
+# Example:										#
+# This Command says encode the first 5 seconds of akiyo_qcif.y4m with libvpx-vp9.	#
+# Create two tests:									# 
+#	1. Segments are 1000 ms								#	
+#	2. Segments are 2000 ms 							#
+#											#
+# sudo ./runcode.sh -f "-c:v libvpx-vp9 -t 5" -i -s 1000,2000 -v static/akiyo_qcif.y4m	# 
+#											#
+#########################################################################################
 EOF
 
 }
 
-
 pre_checks (){
 
+
+	echo -e "\n###################     STEP 1 - PRECHECKS                      ###################\n"
 	## check ffmpeg
 	which ffmpeg
 	
@@ -32,27 +41,27 @@ pre_checks (){
 	
 		## Use which ffmpeg install
 		FFMPEG=`which ffmpeg`
-		echo "using ffmpeg from which command"
-		echo "PATH is: ${FFMPEG}"
+		echo "FFMPEG PATH is: ${FFMPEG}"
 	else
-		echo "using local ffmpeg"
 		echo "FFMPEG PATH is: ${FFMPEG}"
 	fi
 
 	## Shaka Dir
-	echo "Shaka dir: $SHAKADIR"
+	echo "SHAKA DIR: $SHAKADIR"
 
-	which MP4Box
+	which MP4Box > /dev/null
 
 	if [[ $? -ne 0 ]]; then
 	
 		echo "Please install MP4box"
 		exit 1
+	else 
+		echo "MP4Box PATH is: `which MP4Box`"
 	fi
 
 
 	## Check apache is installed
-	which apache2
+	which apache2 > /dev/null
 
 	if [[ $? -eq 0 ]]; then
 
@@ -61,10 +70,10 @@ pre_checks (){
         	echo "APACHE PATH is: ${APACHE2}"
 
 		## check if apache running 
-		ps -ef | grep -i apache2 | grep -qv "grep"
+		ps -ef | grep -i apache | grep -qv "grep"
 
 		if [ $? -eq 0 ]; then
-			echo "apache is running. Hope the config is right!"
+			echo "Apache is Running...."
 		else
 			echo "starting apache...."
 			sudo /etc/init.d/apache2 start
@@ -83,165 +92,234 @@ pre_checks (){
 		exit 1
 	fi
 
-	#/usr/sbin/apache2
-	# Check that something is listening on 443 or 80
-	#netstat -anp | grep -e ":180" -e ":443"
+	echo -e "\e[32mPRECHECKS COMPLETE\e[0m\n"
 
+}
+
+parse_encoding (){
+
+	##TODO BUT IN A BETTER CHECK
+	echo -e "\n###################     STEP 2 - PARSE ENCODING                 ##################\n"
+
+	if [[ $FFMPEGFLAGS =~ .*libx264.* ]];
+	then
+		ENCODING=libx264
+	elif [[ $FFMPEGFLAGS =~ .*libx265.* ]];
+	then
+		ENCODING=libx265
+	elif [[ $FFMPEGFLAGS =~ .*libvpx-vp9.* ]]
+	then
+		ENCODING=libvpx-vp9
+	else
+		echo "Unable to get encoding from -f flag."
+		usage
+		exit 1
+	fi
+	echo "Encoding Set to $ENCODING"
+	echo -e "\e[32mPARSE ENCODING COMPLETE\e[0m\n"
 }
 
 generate_mp4 (){
 
-	encoding=$1
+	echo -e "\n###################     STEP 3 - GENERATING MP4                 ##################\n"
 
-	## cleanup fro previous run
+	encoding=$ENCODING
+
+	if [[ -z $YUVVID ]];
+	then
+		echo "-v is Mandatory! Exiting...."
+		usage
+		exit 1
+	fi
+
+	video="`pwd`/$YUVVID"
+
+	if [[ ! -f $video ]];then
+		echo "$video does not exist"
+		usage
+		exit 1
+	fi
+	## cleanup from previous runs
 	cd $VIDDIR
-	rm -rf ./$encoding/*
+	rm -rf ./$encoding/* > /dev/null
 
 	vp9="libvpx-vp9"
 	x264="libx264"
 
-	echo $encoding
-	
+
 	if [[ ( "$encoding" == "$vp9" || "$encoding" == "$x264" ) ]];
 	then
-		echo $encoding $YUVVID
 		mkdir -p $encoding
-		$FFMPEG -i $YUVVID -c:v $encoding -b 32k $encoding/box_32_${encoding}.mp4 &> $encoding/ffmpeg_${encoding}.output
+		
+		cat <<-EOF
+			Creating mp4 video from $video with $encoding.
+			FFMPEG LOG located here: ${VIDDIR}/ffmpeg_${encoding}.output
+		EOF
+
+		$FFMPEG -i $video $FFMPEGFLAGS $encoding/video_${encoding}.mp4 &> ffmpeg_${encoding}.output
+
+		if [[ $? -eq 0 ]];
+		then
+			echo "MP4 located here: ${VIDDIR}/$encoding/video_${encoding}.mp4"
+		else
+			echo "Error occured creating MP4. Please refer to ${VIDDIR}/ffmpeg_${encoding}.output"
+		fi
 	else
 		echo "Please select a supported encoder"
 		usage
 		exit 1
 	fi	
 
+	echo -e "\e[32mGENERATING MP4 COMPLETE\e[0m\n"
 }
 
 
 generate_dash (){
 
-	echo $1
-	echo $2
+
+	echo -e "###################     STEP 4 - SEGMENT AND CREATE MPD         ##################\n"
+
+	encoding=$ENCODING
 	if [ -z $SEGMENTSIZE ];then
-        	echo "No segment times provided! Please see Usage below. Exiting...."
+        	echo -e "No segment times provided! Please see Usage below. \e[31mExiting....\e[0m"
 		usage
 		exit 1
 	fi
 
-	segmentlist=(`echo $1 | tr ',' ' '`)
-	echo "${#segmentlist[@]} Segments size. Creating videosì...."
-
-	echo ${segmentlist[0]} ${segmentlist[1]} ${#segmentlist[@]}
+	segmentlist=(`echo $SEGMENTSIZE | tr ',' ' '`)
 
 	NUMBEROFTESTSEG=${#segmentlist[@]}
 	
 	cd $VIDDIR
+	mpd="video_${encoding}_dash.mpd"
 
 	for ((i=0;i<$NUMBEROFTESTSEG;i++));
 	do
 		segmenttime=${segmentlist[i]}
-		tmpdir="$VIDDIR/$2/seg_${segmentlist[i]}"
-                echo $tmpdir
-		echo "Generating files for $segmenttime ms"
-		echo "Creating directory ${tmpdir}"
+
+		tmpdir="$VIDDIR/$encoding/seg_${segmentlist[i]}"
 		mkdir -p $tmpdir
 		cd $tmpdir
 
-		#clean up form previous runs
-		echo "Creating segments and dash files. See output from MP4box here $tmpdir/MP4Box_${segmenttime}.output"
-		MP4Box -dash ${segmenttime} -rap -segment-name segment_ $VIDDIR/$2/box_32_${2}.mp4 &> ./MP4Box_${segmenttime}.output
+		MP4Box -dash ${segmenttime} -segment-name segment_ $VIDDIR/$encoding/video_${encoding}.mp4 &> ./MP4Box_${segmenttime}.output
+       		
+		cp $CONFIGDIR/myapp.js $CONFIGDIR/runtest.html $VIDDIR/$encoding/seg_${segmenttime}/
+		cd $VIDDIR/$encoding/seg_${segmenttime}/
+		# Edit files
+		sed -i "s|MPDGOESHERE|$mpd|g" myapp.js
+
+		cat <<-EOF
+			Creating $segmenttime ms segments and dash files
+			MPD and Segments are here: $tmpdir
+			See output from MP4box here $tmpdir/MP4Box_${segmenttime}.output
+			myapp.js & runtest.html here $VIDDIR/$encoding/seg_${segmenttime}/
+
+		EOF
 	done
 
-	## Generate MP4
-	#$FFMPEG -i box.mp4 -c:v libx264 -b 32k box_32_h264.mp4
-
-	## Create dash and segment
-	#MP4Box -dash 4000 -rap -segment-name segment_ box_32_h264.mp4
-
+	echo -e "\e[32mSEGMENT AND CREATE MPD COMPLETE\e[0m\n"
 }
 
 generate_shaka (){
 
+	echo -e "################### STEP 5 - RUN TESTS ONE AT A TIME ###################\n"
+
 	## Need to move files in place
-	segmentlist=(`echo $1 | tr ',' ' '`)
-	encoding=$2
-
-	echo $PUBLICHTML
-	
-	#dir=$
-
+	segmentlist=(`echo $SEGMENTSIZE | tr ',' ' '`)
+	encoding=$ENCODING
 
         NUMBEROFTESTSEG=${#segmentlist[@]}
-	echo $NUMBEROFTESTSEG
        
        	shakadist="${SHAKADIR}/dist"
 	cd $PUBLICHTML
 	test -L dist || sudo ln -s $shakadist dist
-	cd -
-
-	mpd="box_32_${encoding}_dash.mpd"
 
 	for ((i=0;i<$NUMBEROFTESTSEG;i++));
         do
 		segment=${segmentlist[i]}
-		cd $VIDDIR/
-       		cp myapp.js runtest.html $VIDDIR/$encoding/seg_${segment}/
+		echo "Moving files for ${segment} ms segment test into $PUBLICHTML"
+		
+		## copy the files into place
+		rm -f $PUBLICHTML/segment_* > /dev/null
+		test -e $PUBLICHTML/runtest.html && rm -f $PUBLICHTML/runtest.html
+		test -e $PUBLICHTML/myapp.js && rm -f $PUBLICHTML/myapp.js
+		
 		cd $VIDDIR/$encoding/seg_${segment}/
-		## Edit files
-		sed -i "s|MPDGOESHERE|$mpd|g" myapp.js
-
-		## move the files into place
 		sudo cp segment_* runtest.html myapp.js $mpd $PUBLICHTML  
 
-		read -p "`echo -e "Files are now in place for ${segment} test.\nPlease connect to http://<YOUR IP>/runtest.html\nWhen ready to run move onto next test type y otherwise any other key to exit:\n"`" -n 1 -r response
+		echo -e "Files are now in place for ${segment} test.\nPlease connect to http://<YOUR IP>/runtest.html\nOnce ready you can then move onto further tests.....\n"
+	
+		if [[ $NUMBEROFTESTSEG -ne 1 ]];
+		then
 
-		echo ""
-		rep=`echo $response | tr '[:upper:]' '[:lower:]'`
-		if [[ $rep != "y" ]];then
-			echo "exiting..."
-			exit 0
+			let next=i+1
+
+			if [[ $next -lt $NUMBEROFTESTSEG ]];
+			then
+				read -p "`echo -e "\nWould you like to continue with ${segmentlist[next]} ms test?\nType y to continue or any other key to exit:\n"`" -n 1 -r response
+
+				rep=`echo $response | tr '[:upper:]' '[:lower:]'`
+		
+				if [[ $rep != "y" ]];then
+					echo -e "\nexiting..."
+					exit 0
+				fi
+			fi
 		fi	
         done
+
+	echo -e "\e[32mRUN TESTS ONE AT A TIME COMPLETE\e[0m\n"
 }
-
-
-
-
-
-
 
 IGNORE=false
 
-while getopts "his:e:" key;
+while getopts "f:his:v:" key;
 do
 	case $key in
-	        e)
-			ENCODING=$OPTARG
-			echo $ENCODING
+		f)
+			FFMPEGFLAGS=$OPTARG
 			;;	
 		h)
 			usage
 			exit 0
 			;;
 		i)
-			pre_checks
+			IGNORE=true
 			;;
 		s)
 			SEGMENTSIZE=$OPTARG
-			echo $SEGMENTSIZE
 			if [ -z $SEGMENTSIZE ];then
-                		"No segment times provided! Exiting...."
+                		echo "-s is Mandatory! Exiting...."
 				usage
                 		exit 1
 			fi
-
 			;;
+		v)
+			YUVVID=$OPTARG
+			if [ -z $YUVVID ];then
+                                echo "-v is Mandatory! Exiting...."
+                                usage
+                                exit 1
+                        fi
+                        ;;
+
 	esac
 done
 
 if ! $IGNORE; then
-	echo "Running prechecks..."
 	pre_checks
+else 
+	cat <<-EOF
+		#############  STEP 1 - SKIPPING PRECHECKS ###################
+
+		-i flag supplied in the command line. Skipping pre checks
+
+	EOF
+
 fi
-#generate_mp4 $ENCODING
-#generate_dash $SEGMENTSIZE $ENCODING
-generate_shaka $SEGMENTSIZE $ENCODING
+
+parse_encoding
+generate_mp4 
+generate_dash 
+generate_shaka
 

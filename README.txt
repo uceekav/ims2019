@@ -8,6 +8,20 @@
 
 ########################
 ########################
+######## VIDEOS ########
+########################
+########################
+
+There are two sample videos included in this submission.
+
+cd ./static
+
+        wget https://media.xiph.org/video/derf/y4m/akiyo_qcif.y4m
+        wget https://media.xiph.org/video/derf/y4m/tractor_1080p25.y4m
+
+
+########################
+########################
 ### EXAMPLE COMMANDS ###
 ########################
 ########################

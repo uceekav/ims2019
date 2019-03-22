@@ -13,17 +13,15 @@ cat << EOF
 # -h This help message.										#
 # -i Ignores Pre checks										#
 # -m MP4Box flags:										#
-#	Note "--segment_name segment_" is not necessary.					#
+#	Note "--segment-name segment_" is not necessary.					#
 #    	"-dash" can support multiple values, e.g. "-dash 1000,2000,5000"  			#
 # -v Raw video file to encode									#
 #												#
 # Example:											#
 # This Command says encode the first 5 seconds of akiyo_qcif.y4m with libvpx-vp9.		#
-# Create two tests:										# 
-#	1. Segments are 1000 ms									#		
-#	2. Segments are 2000 ms 								#
+# and segment with 1000ms									# 
 #												#
-# sudo ./runcode.sh -f "-c:v libvpx-vp9 -t 5" -i -m "-dash 1000,2000" -v static/akiyo_qcif.y4m	# 
+# sudo ./runcode.sh -f "-c:v libvpx-vp9 -t 5" -i -m "-dash 1000" -v static/akiyo_qcif.y4m	# 
 #												#
 #################################################################################################
 EOF
@@ -40,7 +38,7 @@ pre_checks (){
 	echo -e "###################     STEP 1 - PRECHECKS                      ###################"
 	print_line
 
-	## check ffmpeg
+	## check if ffmpeg is installed
 	which ffmpeg
 	
 	if [[ $? -eq 0 ]]; then
@@ -49,6 +47,7 @@ pre_checks (){
 		FFMPEG=`which ffmpeg`
 		echo -e "\nFFMPEG PATH is: ${FFMPEG}"
 	else
+		## Otherwise use the one in the submission
 		echo -e "\nFFMPEG PATH is: ${FFMPEG}"
 	fi
 
@@ -110,6 +109,7 @@ generate_mp4 (){
 
 	encoding=$ENCODING
 
+	## Check if video was supplied in command line
 	if [[ -z $YUVVID ]];
 	then
 		echo -e "\n-v is Mandatory! Exiting...."
@@ -119,12 +119,15 @@ generate_mp4 (){
 
 	video="`pwd`/$YUVVID"
 
+	## Check if video exists
 	if [[ ! -f $video ]];then
 		echo -e "\n${video} does not exist"
 		usage
 		exit 1
 	fi
+
 	## cleanup from previous runs
+	mkdir -p $VIDDIR
 	cd $VIDDIR
 	rm -rf ./$encoding/* > /dev/null
 
@@ -132,6 +135,7 @@ generate_mp4 (){
 	x264="libx264"
 	x265="libx265"
 
+	## Check the supplied encoding on the command line matches
 	if [[ ( "$encoding" == "$vp9" || "$encoding" == "$x264"  || "$encoding" == "$x265" ) ]];
 	then
 		mkdir -p $encoding
@@ -142,13 +146,20 @@ generate_mp4 (){
 			FFMPEG LOG located here: ${VIDDIR}/ffmpeg_${encoding}.output
 		EOF
 
-		$FFMPEG -i $video $FFMPEGFLAGS $encoding/video_${encoding}.mp4 &> ffmpeg_${encoding}.output
+		## If extra arguments where passed in with the -f flag
+		if [[ -z $FFMPEGFLAGSREMAININGCMD ]];
+		then
+			$FFMPEG -i $video -c:v $encoding $FFMPEGFLAGS $encoding/video_${encoding}.mp4 &> ffmpeg_${encoding}.output
+		else
+			$FFMPEG -i $video -c:v $encoding $FFMPEGFLAGSREMAININGCMD $encoding/video_${encoding}.mp4 &> ffmpeg_${encoding}.output
+		fi
 
 		if [[ $? -eq 0 ]];
 		then
 			echo "MP4 located here: ${VIDDIR}/$encoding/video_${encoding}.mp4"
 		else
-			echo "Error occured creating MP4. Please refer to ${VIDDIR}/ffmpeg_${encoding}.output"
+			echo -e "\e[31mERROR\e[0m occured creating MP4. Please refer to ${VIDDIR}/ffmpeg_${encoding}.output"
+			exit 1
 		fi
 	else
 		echo "Please select a supported encoder"
@@ -176,6 +187,7 @@ generate_dash (){
 	cd $VIDDIR
 	mpd="video_${encoding}_dash.mpd"
 
+	## For the segments times supplied on the command line generate the relevant dash files 
 	for ((i=0;i<$NUMBEROFTESTSEG;i++));
 	do
 		segmenttime=${segmentlist[i]}
@@ -217,7 +229,7 @@ generate_shaka (){
 	print_line
 
 
-	## Need to move files in place
+	## Need to move files onto web server place
 	segmentlist=(`echo $SEGMENTSIZE | tr ',' ' '`)
 	encoding=$ENCODING
 
@@ -296,6 +308,7 @@ do
 	esac
 done
 
+#Check to see if we have to run pre checks
 if ! $IGNORE; then
 	pre_checks
 else 
@@ -310,7 +323,25 @@ else
 
 fi
 
+## Check if webserver directory exists
+if [[ -z $PUBLICHTML  ]];
+then
+	echo "PUBLICHTML is not configured"
+	echo "Please check config in config/config.cfg..."
+	exit 1
+fi
+
+if [[ ! -d $PUBLICHTML ]];
+then
+	echo "PUBLICHTML does not exist or permissions are incorrect."
+	exit 1
+fi
+
+## Tidy up some of the command line entries. 
 ENCODING="`echo $FFMPEGFLAGS | perl -nle 'm/-c\:v ([A-za-z\-0-9]*)/; print $1' | grep -i [a-z]`"
+ENCODINGCMD="`echo $FFMPEGFLAGS | perl -nle 'm/(-c\:v [A-za-z\-0-9]*)/; print $1' | grep -i [a-z]`"
+FFMPEGFLAGSREMAININGCMD="`echo $FFMPEGFLAGS | sed "s/${ENCODINGCMD}//"`"
+
 SEGMENTSIZE="`echo $MP4BOXFLAGS | perl -nle 'm/-dash ([0-9\,]*)/; print $1'`"
 
 if [ -z $SEGMENTSIZE ];then

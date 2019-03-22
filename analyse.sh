@@ -1,15 +1,44 @@
 #!/bin/bash
 
-RESFILE=$1
+while getopts "r:" key;
+do
+        case $key in
+                r)
+                        RESFILE=$OPTARG
+                        if [ ! -f $RESFILE ];then
+                                echo "File does not exist"
+                                exit 1
+                        fi
+                        ;;
+        esac
+done
+
+if [[ -z $RESFILE ]];
+then
+	echo "File not supplied"
+	exit 1
+fi
+
 TMPFILE="./results/tmp"
 
 prev=0
 let filenumber=$prev+1
-TESTFILE="./results/test_${filenumber}.csv"
 
-grep -B3 "segment_[0-9]" ./results/$RESFILE | grep -e "time" -e "url" | sed 's/^[ \t]*"/"/' | xargs -n2 -d '\n' > $TMPFILE
+DIR="`echo $RESFILE | cut -d '.' -f1`"
+PUTDIR="$DIR/"
+#echo "$PUTDIR"
+mkdir -p $PUTDIR
 
-rm -f ./results/test_*
+TESTFILE="$PUTDIR/test_${filenumber}.csv"
+
+## clear out - hmmh risky......
+rm -f $PUTDIR/*
+
+## Grep for the segment name and 3 lines above it. Then get grep the time and segment name. Reformat with sed and print on one line
+grep -B3 "segment_[0-9]" $RESFILE | grep -e "time" -e "url" | sed 's/^[ \t]*"/"/' | xargs -n2 -d '\n' > $TMPFILE
+
+
+#The har files has all the tests. In this while loop each test is split into an individual file. 
 while read line;
 do
 
@@ -21,7 +50,7 @@ do
 	if [[ curr -lt prev ]];
 	then
 		((filenumber+=1))
-		TESTFILE="./results/test_${filenumber}.csv"
+		TESTFILE="$PUTDIR/test_${filenumber}.csv"
 	fi	
 	echo $SEG,$TIME >> $TESTFILE
 	prev=$curr
@@ -31,6 +60,7 @@ done < $TMPFILE
 ## Cleanup
 rm $TMPFILE
 
-for file in ./results/test*; do
+## For each individual test file print out the latency 
+for file in ./$PUTDIR/test*; do
 	echo "Total Download time for all segments in $file: `cat $file | awk -F',' '{sum+=$2;} END{print sum;}'`"
 done
